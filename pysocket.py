@@ -34,17 +34,17 @@ class EchoServerProtocol:
             "timestamp": time.time(), # (s) physics time
             "imu": {
                 "gyro": [0,0,0], # (roll, pitch, yaw) (radians/sec) body frame
-                "accel_body": [0, 0, 0], # (x, y, z) (m/s^2) body frame
+                "accel_body": [0,0,0], # (x, y, z) (m/s^2) body frame
             },
             "position": [0,0,0], # (north, east, down) (m) earth frame
-            "attitude": [0, 0, 0], # (roll, pitch, yaw) (radians)
-            "velocity": [0, 0, 0], # (north, east, down) (m/s) earth frame
-            "airspeed": 0, # (m/s) optional
-            "windvane": { # optional apparent wing
-                "direction": 0, # (radians) clockwise relative to the front, i.e. 0 = head to wind
-                "speed": 0, # (m/s)
-            },
-            "rng_1": 0 # (m) optional range finder - AGL??
+            "attitude": [0,0,0], # (roll, pitch, yaw) (radians)
+            "velocity": [0,0,0], # (north, east, down) (m/s) earth frame
+#             "airspeed": 0, # (m/s) optional
+#             "windvane": { # optional apparent wing
+#                 "direction": 0, # (radians) clockwise relative to the front, i.e. 0 = head to wind
+#                 "speed": 0, # (m/s)
+#             },
+#             "rng_1": 0 # (m) optional range finder - AGL??
         }
         # response must be a json string, with no spaces, prefixed & suffixed with a '\n' ascii encoded binary
         json_response = f"\n{json.dumps(response, separators=(',', ':'))}\n".encode("ascii")
@@ -54,7 +54,7 @@ class EchoServerProtocol:
         # print every 5000th frame so we can see something is happening
         if input["frame_count"] % 5000 == 0:
             logging.info(f"rcvd: {json.dumps(input)}")
-            logging.info(f"xmit: {json_response}")
+            logging.info(f"xmit {addr} : {json_response}")
 
         # let user know if frames were dropped
         if input["frame_count"] - 1 != self.last_frame:
