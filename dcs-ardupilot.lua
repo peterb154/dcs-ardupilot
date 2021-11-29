@@ -92,9 +92,9 @@ function ProcessInput()
         --defineRotary("RUDDER_TRIM", 12, 3010, 93, "Control System", "Rudder Trim")
         -- GetDevice(0):get_argument_value(rudder_trim_arg)
         -- getting trim value as above is unreliable, so we'll track our own trim position in curr_xxx_trim
-        curr_aileron_trim = set_trim(12, 3008, curr_aileron_trim, -data.pwm[1]) -- not sure if this should be reversed
-        curr_elevator_trim = set_trim(12, 3009, curr_elevator_trim, data.pwm[2])
-        curr_rudder_trim = set_trim(12, 3010, curr_rudder_trim, -data.pwm[4]) -- not sure if this should be reversed
+        curr_aileron_trim = set_trim(12, 3008, curr_aileron_trim, data.pwm[1], false)
+        curr_elevator_trim = set_trim(12, 3009, curr_elevator_trim, data.pwm[2], true)
+        curr_rudder_trim = set_trim(12, 3010, curr_rudder_trim, data.pwm[4], false)
         return host, port
     end
     -- we didnt get a packet from autopilot.. Return nil values so we dont bother processing outputs
@@ -114,8 +114,8 @@ function ProcessOutput(host, port)
     down_distance = start_pos.alt - self_data.LatLongAlt.Alt
     accel_round = 4
     accel_x = round(heliFm.acceleration.x, accel_round)
-    accel_y = round(heliFm.acceleration.y, accel_round)
-    accel_z = round(heliFm.acceleration.z - gravity, accel_round)
+    accel_z = round(heliFm.acceleration.y + gravity, accel_round) -- dcs doesnt report earth gravity. Also seems like dcs is cross reporting z and y
+    accel_y = round(heliFm.acceleration.z, accel_round)
     -- Prepare return data
     returnData = {}
     returnData.timestamp = LoGetModelTime() -- (s) physics time
@@ -125,7 +125,7 @@ function ProcessOutput(host, port)
     returnData.position = {north_distance, east_distance, down_distance} --(north, east, down) (m) earth frame offset from home
     returnData.attitude = {self_data.Bank, self_data.Pitch, self_data.Heading} --(roll, pitch, yaw) (radians)
     returnData.velocity = {velocity.x, velocity.y, velocity.z} --(north, east, down) (m/s) earth frame
-    returnData.airspeed = LoGetTrueAirSpeed() --(m/s)
+    returnData.airspeed = LoGetIndicatedAirSpeed() --(m/s)
     --returnData.rng_1 = LoGetAltitudeAboveGroundLevel() -- meters
     -- every xx seconds show what we are returning to athe autopilot
     --if math.fmod(math.floor(returnData.timestamp), 10) == 0 then
@@ -139,29 +139,45 @@ function ProcessOutput(host, port)
 end
 
 -- take the current trim position and the desired autopilot pwm value
-function set_trim(device_id, control, current_trim_position, desired_pwm)
+function set_trim(device_id, control, current_trim_position, desired_pwm, reversed)
     -- adjusts trim to match pwm input and returns new trim position
-    local curr_trim_pwm = trim2pwm(current_trim_position)
-    local new_trim = pwm2trim(desired_pwm)
-    local new_trim_pwm = trim2pwm(new_trim)
-    local trim_adjustment = new_trim - current_trim_position
-    if trim_adjustment ~= 0  then -- and control == 3009 then
-        log.write(DcsArdupilot.modName, log.DEBUG, "trim control: " .. control
-                .. ", desired pwm:" .. desired_pwm .. ", current_trim_pwm:" .. curr_trim_pwm
-                .. ", current trim:" .. current_trim_position .. ", trim_adjustment:" .. trim_adjustment
-                .. ", new_trim:" .. new_trim .. ", new_trim_pwm:" .. new_trim_pwm)
+    -- device_id - number - the dcs panel device where we can find trim control
+    -- control -- number - the dcs control on the device where we can adjust trim
+    -- current_trim_position - number -2 <= value <=2 - the current trim position
+    -- desired_pwm - number 1000 <= value <= 2000 - the desired pwm value for the control
+    -- reversed - bool - typically -2trim = 1000pwm & 2trim = 2000pwm. If reversed 2trim = 1000pwm & -2trim = 2000pwm (used for pitch)
+    -- returns: number - the new trim position -2 <= value <= 2
+    local new_trim = pwm2trim(desired_pwm, reversed) -- determine the desired trim value
+    local trim_adjustment = new_trim - current_trim_position -- determine how much we should adjust the trim
+    if trim_adjustment ~= 0  then -- if trim needs adjusting
+        --local curr_trim_pwm = trim2pwm(current_trim_position, reversed) -- convert the current trim -2:2 to a pwm value for logging
+        --local new_trim_pwm = trim2pwm(new_trim, reversed) -- convert new trim position to pwm for logging
+        --log.write(DcsArdupilot.modName, log.DEBUG, "trim control: " .. control
+        --        .. ", desired pwm:" .. desired_pwm .. ", current_trim_pwm:" .. curr_trim_pwm
+        --        .. ", current trim:" .. current_trim_position .. ", trim_adjustment:" .. trim_adjustment
+        --        .. ", new_trim:" .. new_trim .. ", new_trim_pwm:" .. new_trim_pwm)
         GetDevice(device_id):performClickableAction(control, trim_adjustment)
     end
+    -- always return the new trim value so that it can be entered in next loop
     return new_trim
 end
 
 -- returns a trim value for a given pwm
-function pwm2trim(pwm_val)
-    -- pwm 1000 = trim -2, pwm 2000 = trim 2
-    return map(pwm_val, 1000, 2000, 2, -2)
+function pwm2trim(pwm_val, reversed)
+    if reversed == true then
+        -- elevator trim 2 = pwm 1000 (nose up)
+        -- elevator trim -2 = pwm 2000 (nose down)
+        return map(pwm_val, 1000, 2000, 2, -2)
+    end
+    -- aileron & rudder trim -2 = pwm 1000 (left)
+    -- aileron & rudder trim 2 = pwm 2000 (right)
+    return map(pwm_val, 1000, 2000, -2, 2)
 end
-function trim2pwm(trim_val)
-    return map(trim_val, 2, -2, 1000, 2000)
+function trim2pwm(trim_val, reversed)
+    if reversed == true then
+        return map(trim_val, 2, -2, 1000, 2000)
+    end
+    return map(trim_val, -2, 2, 1000, 2000)
 end
 
 -- returns a proportional output for a given input val (in_val)
