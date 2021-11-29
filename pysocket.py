@@ -10,6 +10,8 @@ import socket
 import time
 import logging
 
+START_PITCH = 0
+
 
 class EchoServerProtocol:
     def __init__(self):
@@ -30,14 +32,20 @@ class EchoServerProtocol:
             "pwm": decoded[3:] # 16 pwn values range 1000-2000
         }
         # Create a response object
+        gravity = 9.80665
+        rad2deg = 57.2958
+        deg2rad = 0.0174533
+        pitch = 7 * deg2rad
+        roll = 0 * deg2rad
+        yaw = 0 * deg2rad
         response = {
             "timestamp": time.time(), # (s) physics time
             "imu": {
                 "gyro": [0,0,0], # (roll, pitch, yaw) (radians/sec) body frame
-                "accel_body": [0,0,0], # (x, y, z) (m/s^2) body frame
+                "accel_body": [1,0,0], # (x, y, z) (m/s^2) body frame
             },
             "position": [0,0,0], # (north, east, down) (m) earth frame
-            "attitude": [0,0,0], # (roll, pitch, yaw) (radians)
+            "attitude": [roll, pitch, yaw], # (roll, pitch, yaw) (radians)
             "velocity": [0,0,0], # (north, east, down) (m/s) earth frame
 #             "airspeed": 0, # (m/s) optional
 #             "windvane": { # optional apparent wing

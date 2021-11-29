@@ -9,15 +9,6 @@ DcsArdupilot.serverHost = "*" --"127.0.0.1"
 DcsArdupilot.serverPort = 9002
 lunajson = dofile(DcsArdupilot.modDir .. "lunajson.lua")
 struct = dofile( DcsArdupilot.modDir .. "struct.lua")
--- Not sure what these do
---DcsArdupilot.gArguments = {[404]="%.1f"}
-
--- Simulation id
---gSimID = string.format("%08x",os.time())
-
--- State data for export
---gSendStrings = {gSimID, '*'}
---gLastData = {}
 
 function LuaExportStart()
     -- Works once just before mission start.
@@ -30,6 +21,11 @@ function LuaExportStart()
     start_pos.long = start_data.LatLongAlt.Long
     start_pos.alt = start_data.LatLongAlt.Alt
     log.write(DcsArdupilot.modName, log.DEBUG, "Home Position: " .. lunajson.encode(start_pos))
+
+    -- getting current trim value is unreliable, so we'll track our own trim position in curr_xxx_trim
+    curr_aileron_trim = 0
+    curr_elevator_trim = 0
+    curr_rudder_trim = 0
 
     -- create a socket
     log.write(DcsArdupilot.modName, log.INFO, "Opening socket on host : " .. DcsArdupilot.serverHost
@@ -89,8 +85,16 @@ function ProcessInput()
         if math.fmod(data.frame_count, 100) == 0 then
             log.write(DcsArdupilot.modName, log.DEBUG, "PWM" .. lunajson.encode(data.pwm))
         end
-        -- TODO drive inputs to sim
-        -- the output process will need the host and port to which replies should be sent
+        -- P51 https://github.com/dcs-bios/module-p-51d/blob/master/P-51D.lua#L79-L81
+        -- function BIOS.util.defineRotary(msg, device_id, command, arg_number, category, description)
+        --defineRotary("AILERON_TRIM", 12, 3008, 91, "Control System", "Aileron Trim")
+        --defineRotary("ELEVATOR_TRIM", 12, 3009, 92, "Control System", "Elevator Trim")
+        --defineRotary("RUDDER_TRIM", 12, 3010, 93, "Control System", "Rudder Trim")
+        -- GetDevice(0):get_argument_value(rudder_trim_arg)
+        -- getting trim value as above is unreliable, so we'll track our own trim position in curr_xxx_trim
+        curr_aileron_trim = set_trim(12, 3008, curr_aileron_trim, -data.pwm[1]) -- not sure if this should be reversed
+        curr_elevator_trim = set_trim(12, 3009, curr_elevator_trim, data.pwm[2])
+        curr_rudder_trim = set_trim(12, 3010, curr_rudder_trim, -data.pwm[4]) -- not sure if this should be reversed
         return host, port
     end
     -- we didnt get a packet from autopilot.. Return nil values so we dont bother processing outputs
@@ -99,6 +103,8 @@ end
 
 function ProcessOutput(host, port)
     -- https://github.com/peterb154/dcsStats/blob/master/docs/Export.lua
+    deg2rad = 0.0174533
+    gravity = 9.80665
     self_data = LoGetSelfData() -- get information about self
     accel = LoGetAccelerationUnits()
     heliFm = LoGetHelicopterFMData()
@@ -106,33 +112,61 @@ function ProcessOutput(host, port)
     north_distance = getLatDistMeters(start_pos.lat, self_data.LatLongAlt.Lat)
     east_distance = getLatDistMeters(start_pos.long, self_data.LatLongAlt.Long)
     down_distance = start_pos.alt - self_data.LatLongAlt.Alt
+    accel_round = 4
+    accel_x = round(heliFm.acceleration.x, accel_round)
+    accel_y = round(heliFm.acceleration.y, accel_round)
+    accel_z = round(heliFm.acceleration.z - gravity, accel_round)
     -- Prepare return data
     returnData = {}
     returnData.timestamp = LoGetModelTime() -- (s) physics time
     returnData.imu = {}
     returnData.imu.gyro = {heliFm.angular_speed.x, heliFm.angular_speed.y, heliFm.angular_speed.z} -- (roll, pitch, yaw) (radians/sec) body frame
-    returnData.imu.accel_body = {accel.x, accel.y, accel.z} -- (x, y, z) (m/s^2) body frame
+    returnData.imu.accel_body = {accel_x, accel_y, accel_z} -- (x, y, z) (m/s^2) body frame
     returnData.position = {north_distance, east_distance, down_distance} --(north, east, down) (m) earth frame offset from home
     returnData.attitude = {self_data.Bank, self_data.Pitch, self_data.Heading} --(roll, pitch, yaw) (radians)
     returnData.velocity = {velocity.x, velocity.y, velocity.z} --(north, east, down) (m/s) earth frame
     returnData.airspeed = LoGetTrueAirSpeed() --(m/s)
-    returnData.rng_1 = LoGetAltitudeAboveGroundLevel() -- meters
+    --returnData.rng_1 = LoGetAltitudeAboveGroundLevel() -- meters
+    -- every xx seconds show what we are returning to athe autopilot
+    --if math.fmod(math.floor(returnData.timestamp), 10) == 0 then
+        --log.write(DcsArdupilot.modName, log.DEBUG, "Sending: " .. lunajson.encode(returnData))
+        --log.write(DcsArdupilot.modName, log.DEBUG, "accel: " .. lunajson.encode(returnData.imu.accel_body))
+        --log.write(DcsArdupilot.modName, log.DEBUG, "attitude: " .. lunajson.encode(returnData.attitude))
+    --end
     returnJson = "\n" .. lunajson.encode(returnData) .. "\n"
 
-    pitch_deg = self_data.Pitch * 57.2958
-    bank_deg = self_data.Bank * 57.2958
-    yaw_deg = self_data.Heading * 57.2958
-
-    log.write(DcsArdupilot.modName, log.DEBUG, "Attitude:"
-            .. " Pitch:" .. self_data.Pitch .. "rad " .. pitch_deg
-            .. ", Bank: " .. self_data.Bank .. "rad " .. bank_deg
-            .. ", Heading:" .. self_data.Heading .. "rad " .. yaw_deg
-    )
-    --log.write(DcsArdupilot.modName, log.DEBUG, "Sending via udp to host: " .. host .. ":" .. port
-    --        .. " frame:" .. data.frame_count .. " data: " .. returnJson)
-
-    -- send telemetry data back to autopilot
     udp:sendto(returnJson, host, port)
+end
+
+-- take the current trim position and the desired autopilot pwm value
+function set_trim(device_id, control, current_trim_position, desired_pwm)
+    -- adjusts trim to match pwm input and returns new trim position
+    local curr_trim_pwm = trim2pwm(current_trim_position)
+    local new_trim = pwm2trim(desired_pwm)
+    local new_trim_pwm = trim2pwm(new_trim)
+    local trim_adjustment = new_trim - current_trim_position
+    if trim_adjustment ~= 0  then -- and control == 3009 then
+        log.write(DcsArdupilot.modName, log.DEBUG, "trim control: " .. control
+                .. ", desired pwm:" .. desired_pwm .. ", current_trim_pwm:" .. curr_trim_pwm
+                .. ", current trim:" .. current_trim_position .. ", trim_adjustment:" .. trim_adjustment
+                .. ", new_trim:" .. new_trim .. ", new_trim_pwm:" .. new_trim_pwm)
+        GetDevice(device_id):performClickableAction(control, trim_adjustment)
+    end
+    return new_trim
+end
+
+-- returns a trim value for a given pwm
+function pwm2trim(pwm_val)
+    -- pwm 1000 = trim -2, pwm 2000 = trim 2
+    return map(pwm_val, 1000, 2000, 2, -2)
+end
+function trim2pwm(trim_val)
+    return map(trim_val, 2, -2, 1000, 2000)
+end
+
+-- returns a proportional output for a given input val (in_val)
+function map(in_val, in_min, in_max, out_min, out_max)
+    return (in_val - in_min) * (out_max - out_min) / (in_max - in_min) + out_min
 end
 
 -- Return the distance in meters north from starting decimal latitude to a current latitude
@@ -186,10 +220,10 @@ end
 --end
 
 
---function round(num, idp)
---    local mult = 10^(idp or 0)
---    return math.floor(num * mult + 0.5) / mult
---end
+function round(num, idp)
+    local mult = 10^(idp or 0)
+    return math.floor(num * mult + 0.5) / mult
+end
 
 -- Status Gathering Functions
 --function ProcessMainPanel()
